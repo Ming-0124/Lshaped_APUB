@@ -14,11 +14,7 @@ class APUB:
     def initialize_master_problem(self):
         """初始化主问题模型和变量"""
         x = self.model.addVars(4, lb=0, ub=500, name="x")  # 决策变量x（4种产品）
-        eta = self.model.addVar(lb=-5000, name="eta")
-
-        # for i in range(4):
-        #     x[i].start = 7
-        # eta.start = 0.0
+        eta = self.model.addVar(lb=-3000, name="eta")
 
         # 第一阶段目标函数
         self.model.setObjective(gp.quicksum(self.c[i] * x[i] for i in range(4)) + eta, GRB.MINIMIZE)
@@ -94,14 +90,13 @@ class APUB:
                 return True
         return False
 
+
     def generate_optimality_cuts(self, x_vals, params_list, alpha, M_bootstrap, eta_hat):
         N = len(params_list)
         Q_values = []
         E_list = []
         e_list = []
         duals = []
-        E_m = np.zeros(4)
-        e_m = 0
         T_list = []
 
         # 计算所有样本的第二阶段成本和对偶乘子
@@ -124,7 +119,6 @@ class APUB:
             model.optimize()
             Q_values.append(model.objVal)
             duals.append([con.Pi for con in model.getConstrs()])
-        print('duals: ', duals)
 
         # Bootstrap计算APUB
         r = []
@@ -134,31 +128,29 @@ class APUB:
 
             r_m = (Q_values @ V_mn) / N
             r.append(r_m)
+            E_m = np.zeros(4)
+            e_m = 0
             for n in range(N):
                 E_m += V_mn[n] * np.dot(duals[n], T_list[n])
-                e_m += V_mn[n] * np.dot(duals[n], h_n)
+                e_m += V_mn[n] * np.dot(duals[n], params_list[n]['h'])
             E_m, e_m = E_m / N, e_m / N
             E_list.append(E_m)
             e_list.append(e_m)
-        # print('r: ', r)
-        # print('Q_values: ', Q_values)
 
         J = int(np.ceil((1 - alpha) * M_bootstrap))
         sorted_indices = np.argsort(r)
-        E_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * E_list[sorted_indices[J]] + \
+        E_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * E_list[sorted_indices[J-1]] + \
                 (1 / (alpha * M_bootstrap)) * sum(E_list[sorted_indices[m]] for m in range(J + 1, M_bootstrap))
-        e_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * e_list[sorted_indices[J]] + \
+        e_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * e_list[sorted_indices[J-1]] + \
                 (1 / (alpha * M_bootstrap)) * sum(e_list[sorted_indices[m]] for m in range(J + 1, M_bootstrap))
-        # print('E: ', E_new)
-        # print('e', e_new)
 
-        if eta_hat.X < (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * r[sorted_indices[J]] + \
-                (1 / (alpha * M_bootstrap)) * sum(r[sorted_indices[m]] for m in range(J + 1, M_bootstrap)):
-            self.model.addConstr(gp.quicksum(E_new[j] * x_vals[j] for j in range(4)) + eta_hat >= e_new)
-            self.model.update()
-            # print('*******add optimal cut to main problem*********')
-            return True
-        return False
+        w_est = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * r[sorted_indices[J-1]] + \
+                (1 / (alpha * M_bootstrap)) * sum(r[sorted_indices[m]] for m in range(J + 1, M_bootstrap))
+        if eta_hat.X >= w_est:
+            return False
+        self.model.addConstr(gp.quicksum(E_new[j] * x_vals[j] for j in range(4)) + eta_hat >= e_new)
+        self.model.update()
+        return True
 
     def solve_two_stage_apub(self, random_params, alpha=0.1, M_bootstrap=500):
         """
@@ -169,12 +161,10 @@ class APUB:
         :return: 最优解 x, 最优值 objective_value
         """
         self.initialize_master_problem()
-
-
         # first_iteration = True
 
-        num_feasibility_cut = 0
-        num_optimal_cut = 0
+        # num_feasibility_cut = 0
+        # num_optimal_cut = 0
 
         while True:
             # Step 1: 求解主问题（返回变量对象）
@@ -191,23 +181,25 @@ class APUB:
             cut_added = self.generate_optimality_cuts(x_vars, params_list=random_params, M_bootstrap=M_bootstrap,
                                                       alpha=alpha, eta_hat=eta_var)
             if cut_added:
-                num_optimal_cut += 1
+
+                # num_optimal_cut += 1
                 # self.model.computeIIS()
-                constraints = self.model.getConstrs()
-                for con in constraints:
-                    row = self.model.getRow(con)  # 左侧表达式
-                    expr = f"{row} {con.Sense} {con.RHS}"  # 拼接完整公式
-                    print(f"{con.ConstrName}: {expr}")
-                self.model.write("model.lp")
+                # constraints = self.model.getConstrs()
+                # for con in constraints:
+                #     row = self.model.getRow(con)  # 左侧表达式
+                #     expr = f"{row} {con.Sense} {con.RHS}"  # 拼接完整公式
+                #     print(f"{con.ConstrName}: {expr}")
+                continue
+                # self.model.write("model.lp")
             else:
                 break
 
-
+        self.model.write("model.lp")
         *x, eta = self.model.getVars()
         print("\n最优解:")
         print(f"x = {[round(val.X, 2) for val in x]}")
         print(f"eta = {round(eta.X, 2)}")
-        print(f'optimal value: ', self.c[0]*x[0].X+self.c[1]*x[1].X+self.c[2]*x[2].X+self.c[3]*x[3].X+eta.X)
-
-
-        print(num_feasibility_cut, '-------' ,num_optimal_cut)
+        optimal_value = self.c[0]*x[0].X+self.c[1]*x[1].X+self.c[2]*x[2].X+self.c[3]*x[3].X+eta.X
+        print(f'optimal value: ', optimal_value)
+        # print(num_feasibility_cut, '-------' ,num_optimal_cut)
+        return self.model.getVars()

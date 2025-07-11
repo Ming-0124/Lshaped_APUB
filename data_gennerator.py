@@ -6,6 +6,7 @@ class DataGenerator:
     def __init__(self, data_path, data_size):
         self.data_path = data_path
         self.data_size = data_size  # N
+        # self.num_groups = num_groups
 
     def generate_product_mix_data(self):
         """
@@ -56,8 +57,8 @@ class DataGenerator:
 
             # 随机参数T（生产时间矩阵）
             T = np.array([
-                [4 - gamma1 / 4, 9 - gamma1 / 4, 7 - gamma1 / 4, 10 - gamma1 / 4],
-                [3 - gamma2 / 4, 1 - gamma2 / 4, 3 - gamma2 / 4, 6 - gamma2 / 4]
+                [4 - (gamma1 / 4), 9 - (gamma1 / 4), 7 - (gamma1 / 4), 10 - (gamma1 / 4)],
+                [3 - (gamma2 / 4), 1 - (gamma2 / 4), 3 - (gamma2 / 4), 6 - (gamma2 / 4)]
             ])
 
             # 效率矩阵
@@ -82,20 +83,16 @@ class DataGenerator:
 
 
 if __name__ == '__main__':
-    data_path = ' '
-    data_size = 30
-    data_generator = DataGenerator(data_path, data_size)
-    gamma_samples = data_generator.generate_product_mix_data()
-    random_params = data_generator.generate_random_parameters(gamma_samples)
-    # 示例生成30个样本
-    print("前5个样本:\n", gamma_samples[:5])
-    # 查看第一个样本的参数
-    sample_0 = random_params[0]
-    print("h:", sample_0['h'].round(2))
-    print("T:\n", sample_0['T'].round(2))
-    # 绘制产品混合问题的gamma1分布
-    plt.hist(gamma_samples[:, 0], bins=20, alpha=0.7, label='gamma1')
-    plt.hist(gamma_samples[:, 1], bins=20, alpha=0.7, label='gamma2')
-    plt.title("Product Mix: Gamma Distribution")
-    plt.legend()
-    plt.show()
+    train_data_generator = DataGenerator('', 30)
+    xi_samples = train_data_generator.generate_product_mix_data()
+    random_params = train_data_generator.generate_random_parameters(xi_samples)
+
+    test_data_generator = DataGenerator('', 500)
+    test_samples = test_data_generator.generate_product_mix_data()
+    test_params = test_data_generator.generate_random_parameters(test_samples)
+
+    # print(xi_samples,'\n')
+    # print(test_samples)
+    print(random_params,'\n')
+    print(test_params)
+
