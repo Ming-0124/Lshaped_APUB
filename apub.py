@@ -134,11 +134,6 @@ class APUB:
 
             E_list.append(E_m)
             e_list.append(e_m)
-            # E_m1 = (V_mn[:, None, None] * (duals_array[:, :, None] * T_stack)).sum(axis=0).mean(axis=0)
-            # e_m1 = (V_mn * (duals_array * h_stack).sum(axis=1)).mean()
-            # E_m1 = 2 * E_m1 / N
-            # E_list.append(E_m1)
-            # e_list.append(e_m1)
 
         J = int(np.ceil((1 - alpha) * M_bootstrap))
         sorted_indices = np.argsort(r)
@@ -157,7 +152,6 @@ class APUB:
 
         if eta_hat.X >= w_est:
             return False
-        # self.model.addConstr(gp.quicksum(E_new[j] * x_vals[j] for j in range(self.n_items)) + eta_hat >= e_new)
         self.model.addConstr(E_new @ x_vals + eta_hat >= e_new)
         self.model.update()
         return True
