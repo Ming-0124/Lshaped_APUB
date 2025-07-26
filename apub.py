@@ -103,11 +103,6 @@ class APUB:
 
         # Bootstrap计算APUB
         r = []
-        # 将 duals 和 T_list 转换为 numpy 数组
-        # duals_array = np.array(duals)  # shape = (N, 2)
-        # T_stack = np.stack(T_list)  # shape = (N, n_machines, n_products)
-        # h_stack = np.array([params['h'] for params in params_list])  # shape = (N, 2)
-
         for m in range(M_bootstrap):
             bootstrap_indices = np.random.choice(N, size=N, replace=True)
             V_mn = np.bincount(bootstrap_indices, minlength=N)
@@ -129,8 +124,8 @@ class APUB:
             dot_ET = np.einsum('ni, nij -> nj', duals_arr, T_arr)  # (N, n_items)
             dot_e = np.einsum('ni, ni -> n', duals_arr, h_arr)  # (N,)
 
-            E_m = np.sum(V_mn[:, None] * dot_ET, axis=0) / N  # (n_items,)
-            e_m = np.sum(V_mn * dot_e) / N  # scalar
+            E_m = np.sum(V_mn[:, None] * dot_ET, axis=0) / N
+            e_m = np.sum(V_mn * dot_e) / N 
 
             E_list.append(E_m)
             e_list.append(e_m)
