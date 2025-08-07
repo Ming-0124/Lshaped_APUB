@@ -4,27 +4,28 @@ from gurobipy import GRB
 from scipy.stats import multinomial
 from big_random_gen import generate_data_set
 import time
+import params
 
 
 class APUB:
-    def __init__(self, A, b, n_items, n_machines, data_set, model):
+    def __init__(self, A, b, n_items, n_machines, model):
         self.A = A
         self.b = b
-        self.c = data_set[0]['c']
+        self.c = params.c
         self.model = model
         self.n_items = n_items
         self.n_machines = n_machines
         return
 
     def initialize_master_problem(self):
-        """初始化主问题模型和变量"""
-        x = self.model.addVars(self.n_items, lb=0, ub=500, name="x")  # 决策变量x
+        """initialize the master problem"""
+        x = self.model.addVars(self.n_items, lb=0, ub=500, name="x")  # decision variable x
         eta = self.model.addVar(lb=-3000, name="eta")
 
-        # 第一阶段目标函数
+        # first-stage objective function
         self.model.setObjective(gp.quicksum(self.c[i] * x[i] for i in range(self.n_items)) + eta, GRB.MINIMIZE)
 
-        # 第一阶段约束 Ax = b
+        # first stage constraint Ax = b
         for i in range(self.n_machines):
             self.model.addConstr(gp.quicksum(self.A[i, j] * x[j] for j in range(self.n_items)) == self.b[i],
                                  name=f"First_Stage_Constr_{i}")
@@ -33,20 +34,20 @@ class APUB:
         return self.model.getVars()
 
     def solve_master_problem(self):
-        """求解主问题"""
+        """solve master problem"""
         self.model.setParam('OutputFlag', 0)
         self.model.optimize()
 
         if self.model.status == GRB.OPTIMAL:
             return self.model.getVars()
         else:
-            raise Exception(f"主问题求解失败，状态码: {self.model.status}")
+            raise Exception(f"master problem failed, status code: {self.model.status}")
 
     def check_feasibility(self, x_vals, params_list):
         for params in params_list:
             h_n, T_n, W_n = params['h'], params['T'], params['W']
             feas_model = gp.Model("Feasibility_Check")
-            y = feas_model.addVars(self.n_machines*2, lb=0, name="y")
+            y = feas_model.addVars(3*self.n_machines, lb=0, name="y")
             v_p = feas_model.addVars(self.n_machines, lb=0, name="v_p")
             v_m = feas_model.addVars(self.n_machines, lb=0, name="v_m")
 
@@ -75,75 +76,96 @@ class APUB:
     def generate_optimality_cuts(self, x_vals, params_list, alpha, M_bootstrap, eta_hat):
         N = len(params_list)
         Q_values = []
-        E_list = []
-        e_list = []
+        # E_list = []
+        # e_list = []
         duals = []
         T_list = []
+        h_list = []
 
         # 计算所有样本的第二阶段成本和对偶乘子
         for params in params_list:
             q_n, W_n, h_n, T_n = params['q'], params['W'], params['h'], params['T']
             T_list.append(T_n)
+            h_list.append(h_n)
             model = gp.Model("Second_Stage")
-            y = model.addVars(2 * self.n_machines, lb=0, name="y")  # y包含决策变量和松弛变量
+            y = model.addVars(3 * self.n_machines, lb=0, name="y")  # y包含决策变量和松弛变量
 
             # 约束：Wy = h - Tx
+            # for i in range(W_n.shape[0]):
+            #     model.addConstr(
+            #         gp.quicksum(W_n[i, j] * y[j] for j in range(2 * self.n_machines)) == h_n[i] - gp.quicksum(
+            #             T_n[i, j] * x_vals[j].X for j in range(self.n_items)),name=f"Sub_Constr_{i}")
+                
             for i in range(self.n_machines):
                 model.addConstr(
-                    gp.quicksum(W_n[i, j] * y[j] for j in range(2 * self.n_machines)) == h_n[i] - gp.quicksum(
-                        T_n[i, j] * x_vals[j].X for j in range(self.n_items)),
-                    name=f"Sub_Constr_{i}")
+                    gp.quicksum(W_n[i, j] * y[j] for j in range(2 * self.n_machines)) == h_n[i]-gp.quicksum(
+                        T_n[i, j] * x_vals[j].X for j in range(self.n_items)),name=f"Sub_Constr_{i}")
+                
+            model.addConstr(y[4]+y[5] == h_n[-1])  
 
-            model.setObjective(gp.quicksum(q_n[j] * y[j] for j in range(2 * self.n_machines)), GRB.MINIMIZE)
+            model.setObjective(gp.quicksum(q_n[j] * y[j] for j in range(3 * self.n_machines)), GRB.MINIMIZE)
             model.update()
             model.setParam('OutputFlag', 0)
             model.optimize()
-            Q_values.append(model.objVal)
-            duals.append([con.Pi for con in model.getConstrs()])
+            if model.status == GRB.OPTIMAL:
+                Q_values.append(model.objVal)
+                duals.append([con.Pi for con in model.getConstrs()])
+            else:
+                print(f"Second stage optimization failed for params {params}, status code: {model.status}")
+                raise Exception(f"second stage problem failed, status code: {self.model.status}")
 
-        # Bootstrap计算APUB
-        r = []
-        for m in range(M_bootstrap):
-            bootstrap_indices = np.random.choice(N, size=N, replace=True)
-            V_mn = np.bincount(bootstrap_indices, minlength=N)
-            r_m = (Q_values @ V_mn) / N
-            r.append(r_m)
-            # E_m = np.zeros(self.n_items)
-            # e_m = 0
-            # for n in range(N):
-            #     E_m += V_mn[n] * np.dot(duals[n], T_list[n])
-            #     e_m += V_mn[n] * np.dot(duals[n], params_list[n]['h'])
-            # E_m, e_m = E_m / N, e_m / N
-            # E_list.append(E_m)
-            # e_list.append(e_m)
-            # # 向量化计算
-            duals_arr = np.stack(duals)  # (N, 4)
-            T_arr = np.stack(T_list)  # (N, 4, n_items)
-            h_arr = np.array([p['h'] for p in params_list])  # (N, 4)
+        duals_array = np.array(duals)
+        T_array = np.array(T_list)
+        h_array = np.array(h_list)
+        Q_values = np.array(Q_values)
+        #print(duals_array, Q_values)
 
-            dot_ET = np.einsum('ni, nij -> nj', duals_arr, T_arr)  # (N, n_items)
-            dot_e = np.einsum('ni, ni -> n', duals_arr, h_arr)  # (N,)
+        # 预计算关键矩阵乘积
+        dot_T = np.einsum('nm,nmi->ni', duals_array, T_array)  # duals[n] @ T_list[n]
+        dot_h = np.einsum('nm,nm->n', duals_array, h_array)  # duals[n] @ h_list[n]
+        #print('dot_T shape:', dot_T.shape, 'dot_h shape:', dot_h.shape)
+        # generate Bootstrap samples
+        bootstrap_indices = np.random.choice(N, size=(M_bootstrap, N), replace=True)
+        V_mn = np.apply_along_axis(lambda x: np.bincount(x, minlength=N), axis=1, arr=bootstrap_indices)
+        #print('V_mn shape: ', V_mn.shape)  # (M_bootstrap, N)
 
-            E_m = np.sum(V_mn[:, None] * dot_ET, axis=0) / N
-            e_m = np.sum(V_mn * dot_e) / N 
+        # 向量化计算统计量
+        r = np.dot(Q_values, V_mn.T) / N
+        E_m = np.dot(V_mn, dot_T) / N
+        e_m = np.dot(V_mn, dot_h) / N
+        # print('r:', r, 'E_m:', E_m, 'e_m:', e_m)
 
-            E_list.append(E_m)
-            e_list.append(e_m)
+        # # Bootstrap计算APUB
+        # r = []
+        # for m in range(M_bootstrap):
+        #     bootstrap_indices = np.random.choice(N, size=N, replace=True)
+        #     V_mn = np.bincount(bootstrap_indices, minlength=N)
+        #     r_m = (Q_values @ V_mn) / N
+        #     r.append(r_m)
+        #     E_m = np.zeros(self.n_items)
+        #     e_m = 0
+        #     for n in range(N):
+        #         E_m += V_mn[n] * np.dot(duals[n], T_list[n])
+        #         e_m += V_mn[n] * np.dot(duals[n], params_list[n]['h'])
+        #     E_m, e_m = E_m / N, e_m / N
+        #     E_list.append(E_m)
+        #     e_list.append(e_m)
 
         J = int(np.ceil((1 - alpha) * M_bootstrap))
         sorted_indices = np.argsort(r)
-        e_arr = np.array(e_list)
-        E_arr = np.array(E_list)
-        r_arr = np.array(r)
+        # e_arr = np.array(e_list)
+        # E_arr = np.array(E_list)
+        # r_arr = np.array(r)
 
-        E_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * E_list[sorted_indices[J]] + \
-                (1 / (alpha * M_bootstrap)) * np.sum(E_arr[sorted_indices[J + 1 : M_bootstrap]], axis=0)
+        E_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * E_m[sorted_indices[J]] + \
+                (1 / (alpha * M_bootstrap)) * np.sum(E_m[sorted_indices[J + 1 : ]], axis=0)
+        # print('E_new shape:', E_new.shape)
 
-        e_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * e_list[sorted_indices[J]] + \
-                (1 / (alpha * M_bootstrap)) * np.sum(e_arr[sorted_indices[J + 1 : M_bootstrap]])
+        e_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * e_m[sorted_indices[J]] + \
+                (1 / (alpha * M_bootstrap)) * np.sum(e_m[sorted_indices[J + 1 : ]])
 
         w_est = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * r[sorted_indices[J]] + \
-                (1 / (alpha * M_bootstrap)) * np.sum(r_arr[sorted_indices[J + 1 : M_bootstrap]])
+                (1 / (alpha * M_bootstrap)) * np.sum(r[sorted_indices[J + 1 : ]])
 
         if eta_hat.X >= w_est:
             return False
@@ -153,11 +175,11 @@ class APUB:
 
     def solve_two_stage_apub(self, random_params, alpha=0.1, M_bootstrap=1500):
         """
-        求解两阶段APUB问题的L-Shaped算法主
-        :param random_params: 列表，每个元素为字典 {'q': q, 'W': W, 'h': h, 'T': T}
-        :param alpha: APUB的置信水平（默认0.1）
-        :param M_bootstrap: Bootstrap样本量（默认1500）
-        :return: 最优解 x, 最优值 objective_value
+        求解两阶段APUB问题的L-Shaped算法
+        :param random_params: List of {'q': q, 'W': W, 'h': h, 'T': T}
+        :param alpha: APUB的置信水平
+        :param M_bootstrap: Number of bootstrap samples
+        :return: optimal solution x, optimal objective_value
         """
         self.initialize_master_problem()
 
@@ -165,20 +187,16 @@ class APUB:
         num_optimal_cut = 0
 
         while True:
-            # Step 1: 求解主问题（返回变量对象）
+            # Step 1: solve master problem
             *x_vars, eta_var = self.solve_master_problem()
-            #x_opt = np.array([x_vars[i].X for i in range(self.n_items)])
-            #print(f'x_opt: {x_opt}, eta_var: {eta_var.X}')
 
             #Step 2: 生成可行性切割（直接传递变量对象）
-            cut_added = self.check_feasibility(x_vars, params_list=random_params)
-            if cut_added:
-                num_feasibility_cut += 1
-                continue
+            # cut_added = self.check_feasibility(x_vars, params_list=random_params)
+            # if cut_added:
+            #      num_feasibility_cut += 1
+            #      continue
 
             # Step 3: 生成最优性切割（直接传递变量对象）
-
-
             cut_added = self.generate_optimality_cuts(x_vars, params_list=random_params, M_bootstrap=M_bootstrap,
                                                       alpha=alpha, eta_hat=eta_var)
             if cut_added:
@@ -191,7 +209,7 @@ class APUB:
                 continue
             else:
                 break
-
+        # print(f"Total optimality cuts added: {num_optimal_cut}")
         self.model.write("model.lp")
         return self.model.getVars(), self.model.ObjVal
 
@@ -199,10 +217,8 @@ class APUB:
         N = len(params_list)  # Number of original scenarios
         # Generate bootstrap samples (multinomial counts)
         bootstrap_counts = multinomial.rvs(N, [1 / N] * N, size=M_bootstrap)
-        # print(bootstrap_counts.shape)
 
         try:
-            # Create a new model
             model = gp.Model("TwoStage_APUB")
 
             # First-stage variables
@@ -213,7 +229,7 @@ class APUB:
             # Second-stage variables for each original scenario
             y = {}
             for n in range(N):
-                y[n] = model.addVars(2 * self.n_machines, lb=0, name=f"y_{n}")
+                y[n] = model.addVars(3 * self.n_machines, lb=0, name=f"y_{n}")
 
             # Set objective: c'x + t + (1/(alpha*M)) * sum(s)
             model.setObjective(
@@ -234,7 +250,7 @@ class APUB:
                 V_m = bootstrap_counts[m]
                 model.addConstr(
                     s[m] + t >= (1 / N) * gp.quicksum(
-                        V_m[n] * gp.quicksum(params_list[n]['q'][j] * y[n][j] for j in range(2 * self.n_machines))
+                        V_m[n] * gp.quicksum(params_list[n]['q'][j] * y[n][j] for j in range(3 * self.n_machines))
                         for n in range(N)
                     ),
                     name=f"bootstrap_{m}"
@@ -244,10 +260,11 @@ class APUB:
             for n in range(N):
                 for i in range(self.n_machines):
                     model.addConstr(
-                        gp.quicksum(params_list[n]['W'][i, j] * y[n][j] for j in range(2 * self.n_machines)) ==
-                        params_list[n]['h'][i] - gp.quicksum(params_list[n]['T'][i, k] * x[k] for k in range(self.n_items)),
+                        gp.quicksum(params_list[n]['W'][i, j] * y[n][j] for j in range(3 * self.n_machines)) == params_list[n]['h'][i]
+                        -gp.quicksum(params_list[n]['T'][i, k] * x[k] for k in range(self.n_items)),
                         name=f"second_stage_{n}_{i}"
                     )
+                    y[n][4]+y[n][5] == params_list[n]['h'][-1]
 
             # Optimize model
             model.setParam('OutputFlag', 0)
@@ -256,7 +273,6 @@ class APUB:
             if model.status == GRB.OPTIMAL:
                 x_opt = np.array([x[i].X for i in range(self.n_items)])
                 obj_val = model.ObjVal
-                #print(f'extensive form x_opt = {x_opt}, obj_val = {obj_val}')
                 return x_opt, obj_val
             else:
                 print(f"Optimization failed with status {model.status}")
@@ -269,22 +285,39 @@ class APUB:
 
 
 if __name__ == "__main__":
-    b = np.zeros(10)
-    A = np.zeros((10, 20))
-    xi_samples = generate_data_set(120, 10, 20)
+    b = np.zeros(2)
+    A = np.zeros((2, 4))
+    xi_samples = generate_data_set(240, 2, 4)
     model = gp.Model('Master Problem')
-    apub = APUB(A, b, n_items=20, n_machines=10, data_set=xi_samples, model=model)
+    apub = APUB(A, b, n_items=4, n_machines=2, model=model)
     start1 = time.perf_counter()
-    b,a = apub.extensive_form(xi_samples, M_bootstrap=1500)
-    print(f'extensive form: {a}')
+    b,a = apub.extensive_form(xi_samples, alpha=0.1, M_bootstrap=1500)
+    print(f'extensive form: {a}, {b}')
     end1 = time.perf_counter()
     print(f'extensive form time: {end1-start1}s')
     start2 = time.perf_counter()
     (*x_optimal, eta_optimal), a = apub.solve_two_stage_apub(
         xi_samples,
-        alpha=0.2,
+        alpha=0.1,
         M_bootstrap=1500,
     )
     end2 = time.perf_counter()
     print(f'ours: {a}')
+    for i in range(len(x_optimal)):
+        print(f'x_{i}: {x_optimal[i].X}')
+    print(f'eta: {eta_optimal.X}')
     print(f'ours time: {end2 - start2}s')
+
+    # 向量化计算
+    # duals_arr = np.stack(duals)  # (N, 4)
+    # T_arr = np.stack(T_list)  # (N, 4, n_items)
+    # h_arr = np.array([p['h'] for p in params_list])  # (N, 4)
+    #
+    # dot_ET = np.einsum('ni, nij -> nj', duals_arr, T_arr)  # (N, n_items)
+    # dot_e = np.einsum('ni, ni -> n', duals_arr, h_arr)  # (N,)
+    #
+    # E_m = np.sum(V_mn[:, None] * dot_ET, axis=0) / N
+    # e_m = np.sum(V_mn * dot_e) / N
+    #
+    # E_list.append(E_m)
+    # e_list.append(e_m)

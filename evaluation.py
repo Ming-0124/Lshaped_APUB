@@ -15,7 +15,6 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
     reliability = []
 
     for sample in test_samples:
-        # 提取测试样本的W, h, T
         W_test = sample['W']
         h_test = sample['h']
         T_test = sample['T']
@@ -23,15 +22,15 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
 
         # 计算第二阶段成本
         sub_model = gp.Model("OOS_Evaluation")
-        y = sub_model.addVars(2*n_machines, lb=0)
-        sub_model.setObjective(gp.quicksum(q_test[j] * y[j] for j in range(2*n_machines)), GRB.MINIMIZE)
-        # 约束：Wy = h - Tx
+        y = sub_model.addVars(3*n_machines, lb=0)
+        sub_model.setObjective(gp.quicksum(q_test[j] * y[j] for j in range(3*n_machines)), GRB.MINIMIZE)
+        # constraint：Wy = h - Tx
         for i in range(n_machines):
             sub_model.addConstr(
-                gp.quicksum(W_test[i, j] * y[j] for j in range(2*n_machines)) == h_test[i] - gp.quicksum(
+                gp.quicksum(W_test[i, j] * y[j] for j in range(3*n_machines)) == h_test[i] - gp.quicksum(
                     T_test[i, j] * x_optimal[j].X for j in range(n_items)),
                 name=f"Sub_Constr_{i}")
-        sub_model.update()
+        # sub_model.update()
         sub_model.setParam('OutputFlag', 0)
         sub_model.optimize()
 
@@ -40,7 +39,6 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
             for i in range(len(x_optimal)):
                 temp += c[i] * x_optimal[i].X
             total_cost = temp + sub_model.ObjVal
-            # reliability.append(certificate >= total_cost)
             costs.append(total_cost)
         else:
             costs.append(np.inf)  # 标记不可行解
@@ -55,18 +53,18 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
 def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
     time_list = defaultdict(lambda: defaultdict(dict))
 
-    for data_size in [60, 120, 480]:
+    for data_size in [240, 480]:
         for M in M_list:
             tt1 = []
             tt2 = []
             for i in range (10):
                 xi_samples = generate_data_set(data_size, n_machines, n_items)
                 model = gp.Model('Master Problem')
-                apub = APUB(A, b, n_items=n_items, n_machines=n_machines, data_set=xi_samples, model=model)
+                apub = APUB(A, b, n_items=n_items, n_machines=n_machines, model=model)
                 start1 = time.perf_counter()
-                apub.extensive_form(xi_samples, M_bootstrap=M)
+                apub.extensive_form(xi_samples, alpha=0.1, M_bootstrap=M)
                 end1 = time.perf_counter()
-                print(f'extensive form: {end1 - start1}s')
+                #print(f'extensive form: {end1 - start1}s')
                 start2 = time.perf_counter()
                 apub.solve_two_stage_apub(
                     xi_samples,
@@ -74,7 +72,7 @@ def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
                     M_bootstrap=M,
                 )
                 end2 = time.perf_counter()
-                print(f'ours: {end2 - start2}s')
+                #print(f'ours: {end2 - start2}s')
                 tt1.append(end1 - start1)
                 tt2.append(end2 - start2)
             time_list['extensive form'][data_size][M] = np.mean(tt1)
@@ -91,6 +89,7 @@ def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
     color_map = {
         60: 'blue',
         120: 'red',
+        240: 'black',
         480: 'green'
         # 可以加更多 data_size
     }
@@ -129,7 +128,6 @@ def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
 
     plt.xlabel('bootstrap size', fontproperties=bold_times)
     plt.ylabel('Time (s)', fontproperties=bold_times)
-    #plt.title('Method Comparison over Data and M Sizes')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -147,17 +145,18 @@ def run_experiment(A, b, M, n_items, n_machines, data_size, test_size=1000, K=30
         test_samples = generate_data_set(test_size, n_machines, n_items)
 
         for alpha in alpha_list:
-            apub = APUB(A, b, n_items=n_items, n_machines=n_machines, data_set=train_samples, model=gp.Model())
+            apub = APUB(A, b, n_items=n_items, n_machines=n_machines, model=gp.Model())
             (*x_optimal, eta_optimal), certificate = apub.solve_two_stage_apub(
                 train_samples,
                 alpha=alpha,
                 M_bootstrap=M,
             )
-            eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=train_samples[0]['c'], n_items=n_items,n_machines=n_machines)
+            eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=train_samples[0]['c'],
+                                       n_items=n_items, n_machines=n_machines)
             results[alpha]['costs'].append(eval_result['mean_cost'])
             results[alpha]['reliabilities'].append(eval_result['reliability'])
             print(f'epoch {trial+1} of {K}, alpha={alpha:.2f}, '
-                  f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}')
+                  f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, certificate: {certificate:.2f}')
     return results
 
 
@@ -188,13 +187,10 @@ def plot_apub_results(results):
     ax1.plot(best_x, best_y, marker='*', markersize=20,
          markeredgecolor='black', markeredgewidth=2,
          color='magenta', label='Lowest Mean', linestyle='None')
-    # ax1.set_yticks([-3500, -3000, -2500, -2000, -1500, -1000])
+    ax1.set_yticks([4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000])
     ax1.set_xticks(x_vals)
 
     index_of_zero = x_vals.index(0.0)
-    # Replace 0.0 with 'SAA' in the list of labels
-    # x_labels = [str(x) for x in x_vals]
-    #str_nums = x_vals.astype(str)
     str_nums = [f"{x:.2f}" for x in x_vals]
     str_nums[index_of_zero] = 'SAA'
     ax1.set_xticklabels(str_nums, rotation=90)
