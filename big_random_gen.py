@@ -26,27 +26,14 @@ def make_random_block_matrix(k):
 def generate_Th(k):
     T_list = []
     h_list = []
-    mu1, var1 = 12, 5.76
-    mu2, var2 = 2, 0.16
-    std1 = np.sqrt(var1)
-    std2 = np.sqrt(var2)
-    samples1 = np.random.normal(loc=mu1, scale=std1)
-    samples2 = np.random.normal(loc=mu2, scale=std2)
-    H = 50*(0.7*samples1 + 0.3*samples2)
-
-    # mu1 = np.array([12, 8])
-    # mu2 = np.array([2, 1])
-    # Sigma1 = np.array([[5.76, 1.92], [1.92, 2.56]])
-    # Sigma2 = np.array([[0.16, 0.04], [0.04, 0.04]])
-
-    # 生成样本
-    # if np.random.rand() < 0.7:  # 以70%概率从第一个分布采样
-    #     samples = np.random.multivariate_normal(mu1, Sigma1)
-    # else:  # 30%概率从第二个分布采样
-    #     samples = np.random.multivariate_normal(mu2, Sigma2)
-
-    # samples = np.maximum(samples, 0)
-    # gamma1, gamma2 = samples
+    # std1 = np.sqrt(params.var1)
+    # std2 = np.sqrt(params.var2)
+    if np.random.rand() < params.p:  # 以 p 的概率从第一个分布采样
+        samples = np.random.normal(loc=params.mu1, scale=params.var1)
+    else:
+        samples = np.random.normal(loc=params.mu2, scale=params.var2)
+    
+    H = 5*samples
 
     T_row1 = [4, 9, 7, 10]
     T_row2 = [3, 1, 3, 6]
@@ -77,7 +64,6 @@ def generate_data_set(data_size=30, m=6, n=20, seed=None):
     Each instance has m constraints, n first-stage variables.
     Returns: list of dicts, each dict with keys: c, q, T, W, h, gamma, u
     """
-
     # Shared coefficients
     c = params.c
     c = cycle_pattern(c, n).astype(float)

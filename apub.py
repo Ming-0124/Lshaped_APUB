@@ -88,13 +88,7 @@ class APUB:
             T_list.append(T_n)
             h_list.append(h_n)
             model = gp.Model("Second_Stage")
-            y = model.addVars(3 * self.n_machines, lb=0, name="y")  # y包含决策变量和松弛变量
-
-            # 约束：Wy = h - Tx
-            # for i in range(W_n.shape[0]):
-            #     model.addConstr(
-            #         gp.quicksum(W_n[i, j] * y[j] for j in range(2 * self.n_machines)) == h_n[i] - gp.quicksum(
-            #             T_n[i, j] * x_vals[j].X for j in range(self.n_items)),name=f"Sub_Constr_{i}")
+            y = model.addVars(3 * self.n_machines, lb=0, name="y") 
                 
             for i in range(self.n_machines):
                 model.addConstr(
@@ -135,27 +129,8 @@ class APUB:
         e_m = np.dot(V_mn, dot_h) / N
         # print('r:', r, 'E_m:', E_m, 'e_m:', e_m)
 
-        # # Bootstrap计算APUB
-        # r = []
-        # for m in range(M_bootstrap):
-        #     bootstrap_indices = np.random.choice(N, size=N, replace=True)
-        #     V_mn = np.bincount(bootstrap_indices, minlength=N)
-        #     r_m = (Q_values @ V_mn) / N
-        #     r.append(r_m)
-        #     E_m = np.zeros(self.n_items)
-        #     e_m = 0
-        #     for n in range(N):
-        #         E_m += V_mn[n] * np.dot(duals[n], T_list[n])
-        #         e_m += V_mn[n] * np.dot(duals[n], params_list[n]['h'])
-        #     E_m, e_m = E_m / N, e_m / N
-        #     E_list.append(E_m)
-        #     e_list.append(e_m)
-
         J = int(np.ceil((1 - alpha) * M_bootstrap))
         sorted_indices = np.argsort(r)
-        # e_arr = np.array(e_list)
-        # E_arr = np.array(E_list)
-        # r_arr = np.array(r)
 
         E_new = (1 - (M_bootstrap - J) / (alpha * M_bootstrap)) * E_m[sorted_indices[J]] + \
                 (1 / (alpha * M_bootstrap)) * np.sum(E_m[sorted_indices[J + 1 : ]], axis=0)
@@ -215,7 +190,7 @@ class APUB:
 
     def extensive_form(self, params_list, alpha=0.2, M_bootstrap=500):
         N = len(params_list)  # Number of original scenarios
-        # Generate bootstrap samples (multinomial counts)
+    
         bootstrap_counts = multinomial.rvs(N, [1 / N] * N, size=M_bootstrap)
 
         try:
@@ -283,6 +258,63 @@ class APUB:
         except Exception as e:
             print(f"Other error: {e}")
 
+    def run_saa(self, params_list):
+        try:
+            N = len(params_list)  # 场景数
+            model = gp.Model("TwoStage_SAA")
+
+            # 第一阶段变量
+            x = model.addVars(self.n_items, lb=0, ub=500, name="x")
+
+            # 第二阶段变量
+            y = {}
+            for n in range(N):
+                y[n] = model.addVars(3 * self.n_machines, lb=0, name=f"y_{n}")
+
+            # 目标函数: c'x + (1/N) * sum( q_n' y_n )
+            model.setObjective(
+                gp.quicksum(self.c[i] * x[i] for i in range(self.n_items)) +
+                (1 / N) * gp.quicksum(
+                    gp.quicksum(params_list[n]['q'][j] * y[n][j] for j in range(3 * self.n_machines))
+                    for n in range(N)
+                ),
+                GRB.MINIMIZE
+            )
+
+            # 第一阶段约束: Ax = b
+            for i in range(self.A.shape[0]):
+                model.addConstr(
+                    gp.quicksum(self.A[i, j] * x[j] for j in range(self.n_items)) == self.b[i],
+                    name=f"first_stage_{i}"
+                )
+
+            # 第二阶段约束: W_n y_n = h_n - T_n x
+            for n in range(N):
+                for i in range(self.n_machines):
+                    model.addConstr(
+                        gp.quicksum(params_list[n]['W'][i, j] * y[n][j] for j in range(3 * self.n_machines)) ==
+                        params_list[n]['h'][i] -
+                        gp.quicksum(params_list[n]['T'][i, k] * x[k] for k in range(self.n_items)),
+                        name=f"second_stage_{n}_{i}"
+                    )
+
+            # 求解
+            model.setParam('OutputFlag', 0)
+            model.optimize()
+
+            if model.status == GRB.OPTIMAL:
+                x_opt = np.array([x[i].X for i in range(self.n_items)])
+                obj_val = model.ObjVal
+                return x_opt, obj_val
+            else:
+                print(f"Optimization failed with status {model.status}")
+                return None, None
+
+        except gp.GurobiError as e:
+            print(f"Gurobi error: {e}")
+        except Exception as e:
+            print(f"Other error: {e}")
+
 
 if __name__ == "__main__":
     b = np.zeros(2)
@@ -290,6 +322,7 @@ if __name__ == "__main__":
     xi_samples = generate_data_set(240, 2, 4)
     model = gp.Model('Master Problem')
     apub = APUB(A, b, n_items=4, n_machines=2, model=model)
+    
     start1 = time.perf_counter()
     b,a = apub.extensive_form(xi_samples, alpha=0.1, M_bootstrap=1500)
     print(f'extensive form: {a}, {b}')
