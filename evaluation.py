@@ -3,7 +3,9 @@ import gurobipy as gp
 from gurobipy import GRB
 from apub import APUB
 import time
-from big_random_gen import generate_data_set
+import params
+from params_generator import ParametersGenerator
+import json
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from matplotlib.font_manager import FontProperties
@@ -13,31 +15,32 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
     """在测试集上评估解的性能"""
     costs = []
     reliability = []
+    N = len(test_samples['h'])
 
-    for sample in test_samples:
-        W_test = sample['W']
-        h_test = sample['h']
-        T_test = sample['T']
-        q_test = sample['q']
+    for m in range(N):
+        W_test = test_samples['W'][m]
+        h_test = test_samples['h'][m]
+        T_test = test_samples['T']
+        q_test = test_samples['q'][m]
 
         # 计算第二阶段成本
         sub_model = gp.Model("OOS_Evaluation")
         y = sub_model.addVars(3*n_machines, lb=0)
-        sub_model.setObjective(gp.quicksum(q_test[j] * y[j] for j in range(3*n_machines)), GRB.MINIMIZE)
+        sub_model.setObjective(gp.quicksum(q_test[j] * y[j] for j in range(n_machines)), GRB.MINIMIZE)
         # constraint：Wy = h - Tx
         for i in range(n_machines):
             sub_model.addConstr(
-                gp.quicksum(W_test[i, j] * y[j] for j in range(3*n_machines)) == h_test[i] - gp.quicksum(
-                    T_test[i, j] * x_optimal[j].X for j in range(n_items)),
-                name=f"Sub_Constr_{i}")
-        # sub_model.update()
+                gp.quicksum(W_test[i, j] * y[j] for j in range(3*n_machines)) == -gp.quicksum(
+                    T_test[i, j] * x_optimal[j] for j in range(n_items)),name=f"Sub_Constr_{i}")
+        sub_model.addConstr(gp.quicksum(y[j] for j in range(n_machines, 2*n_machines)) == h_test[-1], name="Cap_Constr")
+
         sub_model.setParam('OutputFlag', 0)
         sub_model.optimize()
 
         temp = 0
         if sub_model.status == GRB.OPTIMAL:
             for i in range(len(x_optimal)):
-                temp += c[i] * x_optimal[i].X
+                temp += c[i] * x_optimal[i]
             total_cost = temp + sub_model.ObjVal
             costs.append(total_cost)
         else:
@@ -139,31 +142,67 @@ def run_experiment(A, b, M, n_items, n_machines, data_size, test_size=1000, K=30
         alpha_list = [0.05 * i for i in range(1, 21)]
     alpha_list = np.array(alpha_list)
     results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
+    pg = ParametersGenerator()
+   
+    lam_r, lam_w = 2.0, 5.0 
 
+    h_int_r = (5000, 6000)
+    q_ints_r = [(6, 8)]*2
+    w_ints_r = [(0.8, 1.0)]*2
+
+    h_int_w = (500, 600)
+    q_ints_w = [(20, 25)]*2
+    w_ints_w = [(0.5, 0.6)]*2
     for trial in range(K):
-        train_samples = generate_data_set(data_size, n_machines, n_items)
-        test_samples = generate_data_set(test_size, n_machines, n_items)
+        train_samples = pg.generate_parameters(n=data_size,J=params.n_machines,p=params.p,lam_r=lam_r,lam_w=lam_w,
+                                               h_int_r=h_int_r,q_ints_r=q_ints_r,w_ints_r=w_ints_r,w_ints_w=w_ints_w,
+                                               q_ints_w=q_ints_w,h_int_w=h_int_w)
+
+        test_samples = pg.generate_parameters(n=test_size,J=params.n_machines,p=params.p,lam_r=lam_r,lam_w=lam_w,
+                                              h_int_r=h_int_r,q_ints_r=q_ints_r,w_ints_r=w_ints_r,w_ints_w=w_ints_w,
+                                              q_ints_w=q_ints_w,h_int_w=h_int_w)
 
         for alpha in alpha_list:
             apub = APUB(A, b, n_items=n_items, n_machines=n_machines, model=gp.Model())
-            (*x_optimal, eta_optimal), certificate = apub.solve_two_stage_apub(
+            x_optimal, eta_optimal, certificate = apub.solve_two_stage_apub(
                 train_samples,
                 alpha=alpha,
                 M_bootstrap=M,
             )
-            eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=train_samples[0]['c'],
+            eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=params.c,
                                        n_items=n_items, n_machines=n_machines)
             results[alpha]['costs'].append(eval_result['mean_cost'])
             results[alpha]['reliabilities'].append(eval_result['reliability'])
             print(f'epoch {trial+1} of {K}, alpha={alpha:.2f}, '
                   f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, certificate: {certificate:.2f}')
+    
+    serializable_results = {
+        str(alpha): {
+            'costs': [float(c) for c in vals['costs']],
+            'reliabilities': [float(r) for r in vals['reliabilities']]
+        }
+        for alpha, vals in results.items()
+    }
+
+    save_path = f"apub_results_{data_size}.json"
+
+    with open(save_path, "w") as f:
+        json.dump(serializable_results, f, indent=4)
+
+    print(f"\n Results saved to {save_path}")
+
     return results
 
 
 def plot_apub_results(results):
-    plt.rcParams["text.usetex"] = True
+    try:
+        plt.rcParams["text.usetex"] = True
+        plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
+    except Exception:
+        print("Warning: LaTeX not found, using default text rendering.")
+        plt.rcParams["text.usetex"] = False
+
     plt.rcParams["font.family"] = "serif"
-    plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
     bold_times = FontProperties(family='Times New Roman', size=16, weight='bold')
     alpha_list = sorted(results.keys())
     x_vals = [1 - a for a in alpha_list] # 横轴是 1 - alpha
@@ -184,10 +223,17 @@ def plot_apub_results(results):
     fig, ax1 = plt.subplots(figsize=(8, 6))
     ax1.plot(x_vals, mean_costs, 'b-', label='Average Loss')
     ax1.fill_between(x_vals, lower_quantile, upper_quantile, alpha=0.35, color='blue')
+    # === 标出 outliers ===
+    for j, a in enumerate(alpha_list):
+        q10, q90 = lower_quantile[j], upper_quantile[j]
+        outliers = [c for c in results[a]['costs'] if (c < q10 or c > q90)]
+        if outliers:  # 用红色小点标出
+            ax1.scatter([x_vals[j]]*len(outliers), outliers,
+                        color='red', s=20, alpha=0.6, label='_nolegend_')
     ax1.plot(best_x, best_y, marker='*', markersize=20,
          markeredgecolor='black', markeredgewidth=2,
          color='magenta', label='Lowest Mean', linestyle='None')
-    ax1.set_yticks([4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000])
+    # ax1.set_yticks([4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000])
     ax1.set_xticks(x_vals)
 
     index_of_zero = x_vals.index(0.0)

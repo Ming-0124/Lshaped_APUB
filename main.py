@@ -3,7 +3,7 @@ import params
 from evaluation import *
 
 if __name__ == '__main__':
-    np.random.seed(params.seed)
+    # np.random.seed(params.seed)
 
     n_items = params.n_items
     n_machines = params.n_machines

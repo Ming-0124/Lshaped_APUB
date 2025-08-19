@@ -1,23 +1,17 @@
 import numpy as np
 
-seed = 1234
-
 epoch = 30
 
-p = 0.1
+p = 0.995
 
-mu1, var1 = 20, 5.76
-mu2, var2 = 2, 0.16
-
-bootstrap_size = 1500   # M
+bootstrap_size = 1000   # M
 
 data_size = 120  # N
 
 n_items = 4   # x dimension
-c = [-12, -18, -20, -40]
+c = [-14, -9, -20, -15]
 
 n_machines = 2  # y dimension
-q = [18, 9]
 
 b = np.zeros(n_machines)
 
