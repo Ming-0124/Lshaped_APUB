@@ -96,6 +96,10 @@ if __name__ == "__main__":
     # print(f"T: {dataset[0]['T']}")
     print("T shape:", dataset[0]['T'].shape, "W shape:",
           dataset[0]['W'].shape, "h shape:", dataset[0]['h'].shape)
+    print("\nT matrix:")
+    print(dataset[0]['T'])
+    print("\nW matrix:")
+    print(dataset[0]['W'])
     # print("Instance[0] c[:5]:", dataset[1]['c'][:5])
     # print("Instance[0] h[:3]:", dataset[0]['h'][:3],'\n')
     # print("W: ", dataset[0]['W'])

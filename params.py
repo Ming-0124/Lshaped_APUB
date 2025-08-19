@@ -2,7 +2,7 @@ import numpy as np
 
 epoch = 30
 
-p = 0.995
+p = 0.9
 
 bootstrap_size = 1000   # M
 

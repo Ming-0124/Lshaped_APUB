@@ -270,7 +270,7 @@ class APUB:
             model = gp.Model("TwoStage_SAA")
 
             # 第一阶段变量
-            x = model.addVars(self.n_items, lb=0, ub=500, name="x")
+            x = model.addVars(self.n_items, lb=0, ub=100000, name="x")
 
             # 第二阶段变量
             y = {}
